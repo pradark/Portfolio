@@ -5,14 +5,20 @@ Self-updating dashboard showing two line charts per ticker:
 - **Left**: last 3 months, daily close, with trailing 3-month moving average
 - **Right**: last 5 years, daily close, with trailing 3-month moving average
 
-Tickers tracked:
+Tickers tracked, by category:
 
-- `SPY` — SPDR S&P 500 ETF Trust
-- `VGIAX` — Vanguard Growth Index Admiral
-- `VTIAX` — Vanguard Total Intl Stock Index Admiral
-- `VDE` — Vanguard Energy ETF
-- `ITA` — iShares U.S. Aerospace & Defense ETF
-- `VWO` — Vanguard FTSE Emerging Markets ETF
+- **US Stock Market**: VTSAX
+- **US Large Cap Equity**: SPY, VFIAX, VIGAX, VGIAX, VLCAX, VVIAX, VDADX, VHYAX, VFTAX
+- **US Mid Cap Equity**: VEXAX, VIMAX, VMGMX, VMVAX
+- **US Small Cap Equity**: VSMAX, VSGAX, VSIAX
+- **International Developed Equity**: VTMGX, VEUSX, VFWAX, VPADX, VTIAX, VFSAX, VIAAX
+- **Emerging Markets Equity**: VEMAX, VWO
+- **US Bonds**: VBTLX, VBILX, VBIRX, VBLAX
+- **US Government Bonds**: VTAPX
+- **International Bonds**: VTABX
+- **Real Estate**: VGRLX, VGSLX
+- **Sector Equity**: VENAX, VDE, VFAIX, VHCIX, VINAX, ITA, VITAX, VMIAX, VTCAX, VUIAX
+- **Money Market**: VMFXX
 
 Data comes from Yahoo Finance via the `yfinance` library. The workflow runs every weekday at 22:30 UTC (~1.5h after US market close) and can also be triggered manually from the Actions tab.
 

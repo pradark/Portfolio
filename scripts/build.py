@@ -21,14 +21,78 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-TICKERS: dict[str, str] = {
-    "SPY":   "SPDR S&P 500 ETF Trust",
-    "VGIAX": "Vanguard Growth Index Admiral",
-    "VTIAX": "Vanguard Total Intl Stock Index Admiral",
-    "VDE":   "Vanguard Energy ETF",
-    "ITA":   "iShares U.S. Aerospace & Defense ETF",
-    "VWO":   "Vanguard FTSE Emerging Markets ETF",
-}
+# (category, [(ticker, display_name), ...])
+TICKER_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("US Stock Market", [
+        ("VTSAX", "Vanguard Total Stock Market Index Admiral"),
+    ]),
+    ("US Large Cap Equity", [
+        ("SPY",   "SPDR S&P 500 ETF Trust"),
+        ("VFIAX", "Vanguard 500 Index Admiral"),
+        ("VIGAX", "Vanguard Growth Index Admiral"),
+        ("VGIAX", "Vanguard Growth and Income Admiral"),
+        ("VLCAX", "Vanguard Large-Cap Index Admiral"),
+        ("VVIAX", "Vanguard Value Index Admiral"),
+        ("VDADX", "Vanguard Dividend Appreciation Index Admiral"),
+        ("VHYAX", "Vanguard High Dividend Yield Index Admiral"),
+        ("VFTAX", "Vanguard FTSE Social Index Admiral"),
+    ]),
+    ("US Mid Cap Equity", [
+        ("VEXAX", "Vanguard Extended Market Index Admiral"),
+        ("VIMAX", "Vanguard Mid-Cap Index Admiral"),
+        ("VMGMX", "Vanguard Mid-Cap Growth Index Admiral"),
+        ("VMVAX", "Vanguard Mid-Cap Value Index Admiral"),
+    ]),
+    ("US Small Cap Equity", [
+        ("VSMAX", "Vanguard Small-Cap Index Admiral"),
+        ("VSGAX", "Vanguard Small-Cap Growth Index Admiral"),
+        ("VSIAX", "Vanguard Small-Cap Value Index Admiral"),
+    ]),
+    ("International Developed Equity", [
+        ("VTMGX", "Vanguard Developed Markets Index Admiral"),
+        ("VEUSX", "Vanguard European Stock Index Admiral"),
+        ("VFWAX", "Vanguard FTSE All-World ex-US Index Admiral"),
+        ("VPADX", "Vanguard Pacific Stock Index Admiral"),
+        ("VTIAX", "Vanguard Total International Stock Index Admiral"),
+        ("VFSAX", "Vanguard FTSE All-World ex-US Small-Cap Index Admiral"),
+        ("VIAAX", "Vanguard International Dividend Appreciation Index Admiral"),
+    ]),
+    ("Emerging Markets Equity", [
+        ("VEMAX", "Vanguard Emerging Markets Stock Index Admiral"),
+        ("VWO",   "Vanguard FTSE Emerging Markets ETF"),
+    ]),
+    ("US Bonds", [
+        ("VBTLX", "Vanguard Total Bond Market Index Admiral"),
+        ("VBILX", "Vanguard Intermediate-Term Bond Index Admiral"),
+        ("VBIRX", "Vanguard Short-Term Bond Index Admiral"),
+        ("VBLAX", "Vanguard Long-Term Bond Index Admiral"),
+    ]),
+    ("US Government Bonds", [
+        ("VTAPX", "Vanguard Short-Term Inflation-Protected Securities Idx Admiral"),
+    ]),
+    ("International Bonds", [
+        ("VTABX", "Vanguard Total International Bond Index Admiral"),
+    ]),
+    ("Real Estate", [
+        ("VGRLX", "Vanguard Global ex-US Real Estate Index Admiral"),
+        ("VGSLX", "Vanguard Real Estate Index Admiral"),
+    ]),
+    ("Sector Equity", [
+        ("VENAX", "Vanguard Energy Index Admiral"),
+        ("VDE",   "Vanguard Energy ETF"),
+        ("VFAIX", "Vanguard Financials Index Admiral"),
+        ("VHCIX", "Vanguard Health Care Index Admiral"),
+        ("VINAX", "Vanguard Industrials Index Admiral"),
+        ("ITA",   "iShares U.S. Aerospace & Defense ETF"),
+        ("VITAX", "Vanguard Information Technology Index Admiral"),
+        ("VMIAX", "Vanguard Materials Index Admiral"),
+        ("VTCAX", "Vanguard Communication Services Index Admiral"),
+        ("VUIAX", "Vanguard Utilities Index Admiral"),
+    ]),
+    ("Money Market", [
+        ("VMFXX", "Vanguard Federal Money Market"),
+    ]),
+]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUT_HTML  = REPO_ROOT / "index.html"
@@ -39,8 +103,12 @@ MA_WINDOW = 63
 
 def fetch(symbol: str) -> dict | None:
     """Pull 5y daily history; derive 3m slice and MA."""
-    t = yf.Ticker(symbol)
-    hist = t.history(period="5y", interval="1d", auto_adjust=True)
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="5y", interval="1d", auto_adjust=True)
+    except Exception as e:
+        print(f"  ERR {symbol}: {e}", file=sys.stderr)
+        return None
     if hist.empty:
         print(f"  WARN: no data for {symbol}", file=sys.stderr)
         return None
@@ -71,16 +139,23 @@ def fetch(symbol: str) -> dict | None:
 
 def build_payload() -> dict:
     tickers_out: dict[str, dict] = {}
-    for sym, name in TICKERS.items():
-        print(f"Fetching {sym} ({name})...")
-        data = fetch(sym)
-        if data is None:
-            continue
-        data["name"] = name
-        tickers_out[sym] = data
+    groups_out: list[dict] = []
+    for category, items in TICKER_GROUPS:
+        cat_tickers: list[str] = []
+        for sym, name in items:
+            print(f"Fetching {sym} ({name})...")
+            data = fetch(sym)
+            if data is None:
+                continue
+            data["name"] = name
+            tickers_out[sym] = data
+            cat_tickers.append(sym)
+        if cat_tickers:
+            groups_out.append({"name": category, "tickers": cat_tickers})
     return {
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         "ma_window_days": MA_WINDOW,
+        "groups": groups_out,
         "tickers": tickers_out,
     }
 
@@ -89,14 +164,14 @@ HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Ticker Dashboard</title>
+<title>Portfolio — Ticker Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
   :root {
     --bg:#0f1216; --panel:#171b22; --border:#242a33;
     --text:#e7eaee; --muted:#8892a0; --up:#4ade80; --down:#f87171;
-    --accent:#60a5fa;
+    --accent:#60a5fa; --accent-bg:#1a232f;
   }
   * { box-sizing: border-box; }
   body {
@@ -107,9 +182,23 @@ HTML_TEMPLATE = """<!doctype html>
   header { margin-bottom: 20px; }
   h1 { margin: 0 0 4px 0; font-size: 22px; font-weight: 600; }
   .sub { color: var(--muted); font-size: 13px; }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 24px; }
+  .toc a {
+    text-decoration: none; color: var(--accent); background: var(--accent-bg);
+    padding: 5px 10px; border-radius: 6px; font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  .toc a:hover { background: #243042; }
+  .group-head {
+    margin: 28px 0 12px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    font-size: 16px; font-weight: 600; color: var(--text);
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .group-head .count { color: var(--muted); font-size: 12px; font-weight: 400; }
   .card {
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 10px; padding: 16px; margin-bottom: 18px;
+    border-radius: 10px; padding: 16px; margin-bottom: 14px;
   }
   .card-head {
     display: flex; align-items: baseline; justify-content: space-between;
@@ -122,18 +211,23 @@ HTML_TEMPLATE = """<!doctype html>
   .pos { color: var(--up); } .neg { color: var(--down); }
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
-  .chart { height: 300px; }
-  footer { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .chart { height: 280px; min-height: 280px; }
+  .chart.loading {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 12px;
+  }
+  footer { color: var(--muted); font-size: 12px; margin-top: 30px; }
   a { color: var(--accent); }
 </style>
 </head>
 <body>
 <header>
-  <h1>Ticker Dashboard</h1>
+  <h1>Portfolio — Ticker Dashboard</h1>
   <div class="sub">
     Daily close with trailing 3-month moving average.
     Data via Yahoo Finance &middot; generated __GENERATED_AT__
   </div>
+  <div id="toc" class="toc"></div>
 </header>
 <div id="cards"></div>
 <footer>Source: Yahoo Finance. Rebuilt daily by GitHub Actions.</footer>
@@ -142,6 +236,7 @@ HTML_TEMPLATE = """<!doctype html>
 <script>
 const payload = JSON.parse(document.getElementById("payload").textContent);
 const cards = document.getElementById("cards");
+const toc   = document.getElementById("toc");
 
 const layoutBase = {
   paper_bgcolor: "#171b22",
@@ -154,13 +249,29 @@ const layoutBase = {
   hovermode: "x unified",
 };
 
-function renderOne(sym, tk) {
+function slug(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function mkTraces(d) {
+  return [
+    { x: d.dates, y: d.close, name: "Close", type: "scatter", mode: "lines",
+      line: { color: "#60a5fa", width: 1.7 },
+      hovertemplate: "%{x}<br>Close: $%{y:.2f}<extra></extra>" },
+    { x: d.dates, y: d.ma, name: "3M avg", type: "scatter", mode: "lines",
+      line: { color: "#f59e0b", width: 1.5, dash: "dot" },
+      hovertemplate: "%{x}<br>3M avg: $%{y:.2f}<extra></extra>" },
+  ];
+}
+
+function renderCard(sym, tk, container) {
   const card = document.createElement("div");
   card.className = "card";
 
   const chg3 = tk.change_3m_pct, chg5 = tk.change_5y_pct;
   const cls3 = chg3 >= 0 ? "pos" : "neg";
   const cls5 = chg5 >= 0 ? "pos" : "neg";
+  const c3id = `c3m_${sym}`, c5id = `c5y_${sym}`;
 
   card.innerHTML = `
     <div class="card-head">
@@ -174,31 +285,58 @@ function renderOne(sym, tk) {
       </div>
     </div>
     <div class="charts">
-      <div class="chart" id="c3m_${sym}"></div>
-      <div class="chart" id="c5y_${sym}"></div>
+      <div class="chart loading" id="${c3id}" data-sym="${sym}" data-range="three_month">Loading…</div>
+      <div class="chart loading" id="${c5id}" data-sym="${sym}" data-range="five_year">Loading…</div>
     </div>
   `;
-  cards.appendChild(card);
+  container.appendChild(card);
+}
 
-  const mkTraces = d => [
-    { x: d.dates, y: d.close, name: "Close",      type: "scatter", mode: "lines",
-      line: { color: "#60a5fa", width: 1.7 }, hovertemplate: "%{x}<br>Close: $%{y:.2f}<extra></extra>" },
-    { x: d.dates, y: d.ma,    name: "3M avg",     type: "scatter", mode: "lines",
-      line: { color: "#f59e0b", width: 1.5, dash: "dot" }, hovertemplate: "%{x}<br>3M avg: $%{y:.2f}<extra></extra>" },
-  ];
-
-  Plotly.newPlot(`c3m_${sym}`, mkTraces(tk.three_month),
-    { ...layoutBase, title: { text: "Last 3 months", font: { size: 13 }, x: 0.01 } },
-    { displayModeBar: false, responsive: true });
-
-  Plotly.newPlot(`c5y_${sym}`, mkTraces(tk.five_year),
-    { ...layoutBase, title: { text: "Last 5 years",  font: { size: 13 }, x: 0.01 } },
+// Lazy plot rendering — only kick off Plotly.newPlot when a chart scrolls into view.
+const plotted = new Set();
+function plotIfNeeded(el) {
+  if (plotted.has(el.id)) return;
+  plotted.add(el.id);
+  const sym = el.dataset.sym;
+  const range = el.dataset.range;
+  const tk = payload.tickers[sym];
+  if (!tk) return;
+  const d = tk[range];
+  const titleText = range === "three_month" ? "Last 3 months" : "Last 5 years";
+  el.classList.remove("loading");
+  el.textContent = "";
+  Plotly.newPlot(el, mkTraces(d),
+    { ...layoutBase, title: { text: titleText, font: { size: 13 }, x: 0.01 } },
     { displayModeBar: false, responsive: true });
 }
 
-for (const [sym, tk] of Object.entries(payload.tickers)) {
-  renderOne(sym, tk);
+const observer = new IntersectionObserver((entries) => {
+  for (const ent of entries) {
+    if (ent.isIntersecting) plotIfNeeded(ent.target);
+  }
+}, { rootMargin: "200px 0px" });
+
+// Build TOC + groups + cards
+for (const grp of payload.groups) {
+  const id = "group-" + slug(grp.name);
+  const link = document.createElement("a");
+  link.href = "#" + id;
+  link.textContent = `${grp.name} (${grp.tickers.length})`;
+  toc.appendChild(link);
+
+  const head = document.createElement("div");
+  head.className = "group-head";
+  head.id = id;
+  head.innerHTML = `<span>${grp.name}</span><span class="count">${grp.tickers.length} ticker${grp.tickers.length === 1 ? "" : "s"}</span>`;
+  cards.appendChild(head);
+
+  for (const sym of grp.tickers) {
+    renderCard(sym, payload.tickers[sym], cards);
+  }
 }
+
+// Wire up the observer to every chart placeholder
+for (const el of document.querySelectorAll(".chart")) observer.observe(el);
 </script>
 </body>
 </html>
@@ -217,7 +355,7 @@ def main():
         print("ERROR: no ticker data fetched", file=sys.stderr)
         sys.exit(1)
     OUT_HTML.write_text(render(payload), encoding="utf-8")
-    print(f"Wrote {OUT_HTML}  ({len(payload['tickers'])} tickers)")
+    print(f"Wrote {OUT_HTML}  ({len(payload['tickers'])} tickers across {len(payload['groups'])} groups)")
 
 
 if __name__ == "__main__":
