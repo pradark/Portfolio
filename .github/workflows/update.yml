@@ -5,9 +5,7 @@ on:
   # Note: GitHub Actions cron is fixed-UTC, so during EST (Nov–Mar) this fires at 12:00 AM ET.
   schedule:
     - cron: "0 5 * * *"
-  # Allow manual runs from the Actions tab
   workflow_dispatch: {}
-  # Also rebuild on pushes that change the build script or workflow itself
   push:
     branches: [main]
     paths:
@@ -16,16 +14,14 @@ on:
       - ".github/workflows/update.yml"
 
 permissions:
-  contents: write   # needed to commit the refreshed index.html
-  pages: write      # for the Pages deploy step
-  id-token: write
+  contents: write   # commit the refreshed index.html back to THIS repo (history)
 
 concurrency:
   group: update-dashboard
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,7 +39,7 @@ jobs:
       - name: Build dashboard
         run: python scripts/build.py
 
-      - name: Commit updated index.html
+      - name: Commit refreshed index.html (this private repo)
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -55,18 +51,26 @@ jobs:
             git push
           fi
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Set up SSH agent for site deploy
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          path: .
+          ssh-private-key: ${{ secrets.SITE_DEPLOY_KEY }}
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish index.html to public site repo
+        env:
+          SITE_REPO: git@github.com:pradark/portfolio-site.git
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          git clone --depth 1 "$SITE_REPO" "$tmp/site"
+          cp index.html "$tmp/site/index.html"
+          cd "$tmp/site"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "No site changes to push."
+          else
+            git commit -m "site: refresh dashboard $(date -u +'%Y-%m-%d')"
+            git push origin HEAD
+          fi
