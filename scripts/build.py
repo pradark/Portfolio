@@ -1,8 +1,13 @@
 """
 Fetch price data from Yahoo Finance for a list of tickers and build a
-self-contained HTML dashboard (index.html) with two line charts per ticker:
-  - Left:  last ~3 months, daily close, with trailing 3-month moving average
-  - Right: last 5 years, daily close, with trailing 3-month moving average
+self-contained HTML dashboard (index.html) with two tabs:
+
+  Charts:     two line charts per ticker
+              - left:  last ~3 months, daily close + 3-month moving average
+              - right: last 5 years, daily close + 3-month moving average
+
+  Allocation: table by category with expense ratio, YTD/1Y/5Y/10Y returns,
+              and target % allocation (per the Guideline snapshot).
 
 Run locally:
     pip install -r requirements.txt
@@ -94,6 +99,36 @@ TICKER_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
 ]
 
+# Per-fund target allocation % from the Guideline custom-portfolio snapshot.
+# Tickers not in this dict default to 0%. Sum across all funds = 100%.
+FUND_ALLOCATION_PCT: dict[str, float] = {
+    "VIGAX": 20,   # US Large Cap Equity
+    "VVIAX": 30,   # US Large Cap Equity
+    "VEUSX": 10,   # International Developed Equity
+    "VEMAX": 10,   # Emerging Markets Equity
+    "VBTLX": 10,   # US Bonds
+    "VENAX": 10,   # Sector Equity
+    "VINAX": 10,   # Sector Equity
+}
+
+# Expense ratio % by ticker (from the Guideline snapshot; ETFs added from prospectuses).
+EXPENSE_RATIO: dict[str, float] = {
+    "VTSAX": 0.04,
+    "SPY":   0.09, "VFIAX": 0.04, "VIGAX": 0.05, "VGIAX": 0.23,
+    "VLCAX": 0.05, "VVIAX": 0.05, "VDADX": 0.07, "VHYAX": 0.08, "VFTAX": 0.11,
+    "VEXAX": 0.05, "VIMAX": 0.05, "VMGMX": 0.07, "VMVAX": 0.07,
+    "VSMAX": 0.05, "VSGAX": 0.07, "VSIAX": 0.07,
+    "VTMGX": 0.05, "VEUSX": 0.08, "VFWAX": 0.08, "VPADX": 0.09,
+    "VTIAX": 0.09, "VFSAX": 0.16, "VIAAX": 0.16,
+    "VEMAX": 0.13, "VWO":   0.07,
+    "VBTLX": 0.04, "VBILX": 0.06, "VBIRX": 0.06, "VBLAX": 0.06,
+    "VTAPX": 0.06, "VTABX": 0.10,
+    "VGRLX": 0.12, "VGSLX": 0.13,
+    "VENAX": 0.09, "VDE":   0.09, "VFAIX": 0.09, "VHCIX": 0.09, "VINAX": 0.09,
+    "ITA":   0.40, "VITAX": 0.09, "VMIAX": 0.09, "VTCAX": 0.09, "VUIAX": 0.09,
+    "VMFXX": 0.11,
+}
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUT_HTML  = REPO_ROOT / "index.html"
 
@@ -101,11 +136,33 @@ OUT_HTML  = REPO_ROOT / "index.html"
 MA_WINDOW = 63
 
 
+def _pct_change_from_n_days(close: pd.Series, days: int) -> float | None:
+    """% change from the closing price ~n calendar days ago to the latest close."""
+    if len(close) < 2:
+        return None
+    cutoff = close.index.max() - pd.Timedelta(days=days)
+    older = close[close.index <= cutoff]
+    if older.empty:
+        return None
+    return float((close.iloc[-1] / older.iloc[-1] - 1) * 100)
+
+
+def _ytd_pct(close: pd.Series) -> float | None:
+    """% change from first trading day of the current year to the latest close."""
+    if close.empty:
+        return None
+    year = close.index.max().year
+    yrs = close[close.index.year == year]
+    if len(yrs) < 2:
+        return None
+    return float((yrs.iloc[-1] / yrs.iloc[0] - 1) * 100)
+
+
 def fetch(symbol: str) -> dict | None:
-    """Pull 5y daily history; derive 3m slice and MA."""
+    """Pull 10y daily history; derive 5y/3m chart slices, MA, and return windows."""
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="5y", interval="1d", auto_adjust=True)
+        hist = t.history(period="10y", interval="1d", auto_adjust=True)
     except Exception as e:
         print(f"  ERR {symbol}: {e}", file=sys.stderr)
         return None
@@ -116,24 +173,34 @@ def fetch(symbol: str) -> dict | None:
     close = hist["Close"]
     ma = close.rolling(window=MA_WINDOW, min_periods=1).mean()
 
-    cutoff = close.index.max() - pd.Timedelta(days=95)
-    close_3m = close[close.index >= cutoff]
-    ma_3m    = ma[ma.index >= cutoff]
+    # 5-year slice for the right-side chart
+    cutoff_5y = close.index.max() - pd.Timedelta(days=365 * 5 + 5)
+    close_5y = close[close.index >= cutoff_5y]
+    ma_5y    = ma[ma.index    >= cutoff_5y]
 
-    def pack(idx, series_close, series_ma):
+    # 3-month slice for the left-side chart
+    cutoff_3m = close.index.max() - pd.Timedelta(days=95)
+    close_3m = close[close.index >= cutoff_3m]
+    ma_3m    = ma[ma.index    >= cutoff_3m]
+
+    def pack(idx, c, m):
         return {
             "dates": [d.strftime("%Y-%m-%d") for d in idx],
-            "close": [round(float(v), 4) for v in series_close],
-            "ma":    [round(float(v), 4) for v in series_ma],
+            "close": [round(float(v), 4) for v in c],
+            "ma":    [round(float(v), 4) for v in m],
         }
 
     return {
         "three_month": pack(close_3m.index, close_3m, ma_3m),
-        "five_year":   pack(close.index, close, ma),
+        "five_year":   pack(close_5y.index, close_5y, ma_5y),
         "last_price":  round(float(close.iloc[-1]), 2),
         "last_date":   close.index[-1].strftime("%Y-%m-%d"),
-        "change_3m_pct": round(float((close_3m.iloc[-1] / close_3m.iloc[0] - 1) * 100), 2) if len(close_3m) > 1 else 0.0,
-        "change_5y_pct": round(float((close.iloc[-1]   / close.iloc[0]   - 1) * 100), 2) if len(close)    > 1 else 0.0,
+        "change_3m_pct": round(float((close_3m.iloc[-1] / close_3m.iloc[0] - 1) * 100), 2) if len(close_3m) > 1 else None,
+        "change_5y_pct": round(float((close_5y.iloc[-1] / close_5y.iloc[0] - 1) * 100), 2) if len(close_5y) > 1 else None,
+        "ytd_pct":  round(_ytd_pct(close), 2)              if _ytd_pct(close)            is not None else None,
+        "y1_pct":   round(_pct_change_from_n_days(close,  365),  2) if _pct_change_from_n_days(close,  365)  is not None else None,
+        "y5_pct":   round(_pct_change_from_n_days(close,  365*5), 2) if _pct_change_from_n_days(close, 365*5) is not None else None,
+        "y10_pct":  round(_pct_change_from_n_days(close, 365*10), 2) if _pct_change_from_n_days(close, 365*10) is not None else None,
     }
 
 
@@ -142,21 +209,30 @@ def build_payload() -> dict:
     groups_out: list[dict] = []
     for category, items in TICKER_GROUPS:
         cat_tickers: list[str] = []
+        cat_alloc = 0.0
         for sym, name in items:
             print(f"Fetching {sym} ({name})...")
             data = fetch(sym)
             if data is None:
                 continue
             data["name"] = name
+            data["expense_ratio"] = EXPENSE_RATIO.get(sym)
+            data["allocation_pct"] = FUND_ALLOCATION_PCT.get(sym, 0)
             tickers_out[sym] = data
             cat_tickers.append(sym)
+            cat_alloc += data["allocation_pct"]
         if cat_tickers:
-            groups_out.append({"name": category, "tickers": cat_tickers})
+            groups_out.append({
+                "name": category,
+                "allocation_pct": cat_alloc,
+                "tickers": cat_tickers,
+            })
     return {
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         "ma_window_days": MA_WINDOW,
         "groups": groups_out,
         "tickers": tickers_out,
+        "total_allocation": sum(t.get("allocation_pct", 0) for t in tickers_out.values()),
     }
 
 
@@ -179,23 +255,39 @@ HTML_TEMPLATE = """<!doctype html>
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text);
   }
-  header { margin-bottom: 20px; }
+  header { margin-bottom: 12px; }
   h1 { margin: 0 0 4px 0; font-size: 22px; font-weight: 600; }
   .sub { color: var(--muted); font-size: 13px; }
-  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 24px; }
+
+  /* tab bar */
+  .tabs { display: flex; gap: 4px; margin: 16px 0 18px; border-bottom: 1px solid var(--border); }
+  .tab {
+    background: transparent; color: var(--muted); border: 0; cursor: pointer;
+    padding: 10px 16px; font-size: 14px; font-weight: 500;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* TOC pills (charts view) */
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 24px; }
   .toc a {
     text-decoration: none; color: var(--accent); background: var(--accent-bg);
-    padding: 5px 10px; border-radius: 6px; font-size: 12px;
-    border: 1px solid var(--border);
+    padding: 5px 10px; border-radius: 6px; font-size: 12px; border: 1px solid var(--border);
   }
   .toc a:hover { background: #243042; }
+
+  /* group head (charts view) */
   .group-head {
-    margin: 28px 0 12px; padding-bottom: 6px;
-    border-bottom: 1px solid var(--border);
+    margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
     font-size: 16px; font-weight: 600; color: var(--text);
     display: flex; align-items: baseline; gap: 10px;
   }
   .group-head .count { color: var(--muted); font-size: 12px; font-weight: 400; }
+
+  /* ticker card (charts view) */
   .card {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 16px; margin-bottom: 14px;
@@ -213,9 +305,42 @@ HTML_TEMPLATE = """<!doctype html>
   @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
   .chart { height: 280px; min-height: 280px; }
   .chart.loading {
-    display: flex; align-items: center; justify-content: center;
-    color: var(--muted); font-size: 12px;
+    display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px;
   }
+
+  /* allocation table (allocation view) */
+  .alloc-cat {
+    display: flex; align-items: baseline; gap: 12px;
+    margin: 26px 0 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .alloc-cat .name { font-size: 16px; font-weight: 600; }
+  .alloc-cat .pct  { color: var(--accent); font-weight: 600; font-size: 14px; }
+  .alloc-cat .pct.zero { color: var(--muted); font-weight: 400; }
+
+  table.alloc { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.alloc th, table.alloc td {
+    padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--border);
+  }
+  table.alloc th {
+    color: var(--muted); font-weight: 500; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  table.alloc td.fund .sym { font-weight: 700; font-size: 15px; }
+  table.alloc td.alloc {
+    text-align: right; width: 110px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  table.alloc td.alloc.has-alloc { color: var(--text); font-weight: 600; }
+  table.alloc td.num { font-variant-numeric: tabular-nums; }
+  table.alloc tbody tr:hover { background: #1a1f27; }
+
+  .total-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-top: 28px; padding: 12px 14px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  .total-row .label { font-weight: 600; }
+  .total-row .value { font-size: 18px; font-weight: 600; color: var(--accent); }
+
   footer { color: var(--muted); font-size: 12px; margin-top: 30px; }
   a { color: var(--accent); }
 </style>
@@ -224,23 +349,56 @@ HTML_TEMPLATE = """<!doctype html>
 <header>
   <h1>Portfolio — Ticker Dashboard</h1>
   <div class="sub">
-    Daily close with trailing 3-month moving average.
-    Data via Yahoo Finance &middot; generated __GENERATED_AT__
+    Daily close + 3-month moving average. Returns are computed from Yahoo Finance closing prices;
+    expense ratios and target allocations are from your Guideline snapshot.
+    Generated __GENERATED_AT__
   </div>
-  <div id="toc" class="toc"></div>
 </header>
-<div id="cards"></div>
+
+<div class="tabs">
+  <button class="tab active" data-target="view-charts">Charts</button>
+  <button class="tab" data-target="view-alloc">Allocation</button>
+</div>
+
+<div id="view-charts" class="view active">
+  <div id="toc" class="toc"></div>
+  <div id="cards"></div>
+</div>
+
+<div id="view-alloc" class="view">
+  <div id="alloc"></div>
+  <div class="total-row">
+    <span class="label">Total Allocation</span>
+    <span class="value" id="totalAlloc">—</span>
+  </div>
+</div>
+
 <footer>Source: Yahoo Finance. Rebuilt daily by GitHub Actions.</footer>
 
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
 const payload = JSON.parse(document.getElementById("payload").textContent);
+
+/* ---------- tab switching ---------- */
+for (const btn of document.querySelectorAll(".tab")) {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === btn.dataset.target));
+    // make sure charts that became visible get plotted
+    if (btn.dataset.target === "view-charts") {
+      requestAnimationFrame(() => {
+        for (const el of document.querySelectorAll(".chart")) observer.observe(el);
+      });
+    }
+  });
+}
+
+/* ---------- charts view ---------- */
 const cards = document.getElementById("cards");
 const toc   = document.getElementById("toc");
 
 const layoutBase = {
-  paper_bgcolor: "#171b22",
-  plot_bgcolor:  "#171b22",
+  paper_bgcolor: "#171b22", plot_bgcolor: "#171b22",
   font: { color: "#e7eaee", size: 11 },
   margin: { l: 48, r: 16, t: 28, b: 36 },
   xaxis: { gridcolor: "#242a33", linecolor: "#242a33", zerolinecolor: "#242a33" },
@@ -249,9 +407,7 @@ const layoutBase = {
   hovermode: "x unified",
 };
 
-function slug(s) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
+function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
 
 function mkTraces(d) {
   return [
@@ -264,15 +420,17 @@ function mkTraces(d) {
   ];
 }
 
+function fmtPct(v, withPlus = true) {
+  if (v == null) return "—";
+  const sign = v >= 0 && withPlus ? "+" : "";
+  return `${sign}${v.toFixed(2)}%`;
+}
+function pctClass(v) { return v == null ? "" : (v >= 0 ? "pos" : "neg"); }
+
 function renderCard(sym, tk, container) {
   const card = document.createElement("div");
   card.className = "card";
-
-  const chg3 = tk.change_3m_pct, chg5 = tk.change_5y_pct;
-  const cls3 = chg3 >= 0 ? "pos" : "neg";
-  const cls5 = chg5 >= 0 ? "pos" : "neg";
   const c3id = `c3m_${sym}`, c5id = `c5y_${sym}`;
-
   card.innerHTML = `
     <div class="card-head">
       <div class="title-block">
@@ -280,43 +438,35 @@ function renderCard(sym, tk, container) {
       </div>
       <div class="stats">
         <div><span class="k">Last</span> $${tk.last_price.toFixed(2)} <span class="k">(${tk.last_date})</span></div>
-        <div><span class="k">3M</span> <span class="${cls3}">${chg3 >= 0 ? "+" : ""}${chg3.toFixed(2)}%</span></div>
-        <div><span class="k">5Y</span> <span class="${cls5}">${chg5 >= 0 ? "+" : ""}${chg5.toFixed(2)}%</span></div>
+        <div><span class="k">3M</span> <span class="${pctClass(tk.change_3m_pct)}">${fmtPct(tk.change_3m_pct)}</span></div>
+        <div><span class="k">5Y</span> <span class="${pctClass(tk.change_5y_pct)}">${fmtPct(tk.change_5y_pct)}</span></div>
       </div>
     </div>
     <div class="charts">
       <div class="chart loading" id="${c3id}" data-sym="${sym}" data-range="three_month">Loading…</div>
       <div class="chart loading" id="${c5id}" data-sym="${sym}" data-range="five_year">Loading…</div>
-    </div>
-  `;
+    </div>`;
   container.appendChild(card);
 }
 
-// Lazy plot rendering — only kick off Plotly.newPlot when a chart scrolls into view.
 const plotted = new Set();
 function plotIfNeeded(el) {
   if (plotted.has(el.id)) return;
   plotted.add(el.id);
-  const sym = el.dataset.sym;
-  const range = el.dataset.range;
-  const tk = payload.tickers[sym];
+  const tk = payload.tickers[el.dataset.sym];
   if (!tk) return;
-  const d = tk[range];
-  const titleText = range === "three_month" ? "Last 3 months" : "Last 5 years";
-  el.classList.remove("loading");
-  el.textContent = "";
+  const d = tk[el.dataset.range];
+  const titleText = el.dataset.range === "three_month" ? "Last 3 months" : "Last 5 years";
+  el.classList.remove("loading"); el.textContent = "";
   Plotly.newPlot(el, mkTraces(d),
     { ...layoutBase, title: { text: titleText, font: { size: 13 }, x: 0.01 } },
     { displayModeBar: false, responsive: true });
 }
 
 const observer = new IntersectionObserver((entries) => {
-  for (const ent of entries) {
-    if (ent.isIntersecting) plotIfNeeded(ent.target);
-  }
+  for (const ent of entries) if (ent.isIntersecting) plotIfNeeded(ent.target);
 }, { rootMargin: "200px 0px" });
 
-// Build TOC + groups + cards
 for (const grp of payload.groups) {
   const id = "group-" + slug(grp.name);
   const link = document.createElement("a");
@@ -325,18 +475,55 @@ for (const grp of payload.groups) {
   toc.appendChild(link);
 
   const head = document.createElement("div");
-  head.className = "group-head";
-  head.id = id;
+  head.className = "group-head"; head.id = id;
   head.innerHTML = `<span>${grp.name}</span><span class="count">${grp.tickers.length} ticker${grp.tickers.length === 1 ? "" : "s"}</span>`;
   cards.appendChild(head);
 
-  for (const sym of grp.tickers) {
-    renderCard(sym, payload.tickers[sym], cards);
-  }
+  for (const sym of grp.tickers) renderCard(sym, payload.tickers[sym], cards);
 }
-
-// Wire up the observer to every chart placeholder
 for (const el of document.querySelectorAll(".chart")) observer.observe(el);
+
+/* ---------- allocation view ---------- */
+const alloc = document.getElementById("alloc");
+
+function fmtER(v)   { return v == null ? "—" : `${v.toFixed(2)}%`; }
+function fmtRet(v)  { return v == null ? "—" : `${v.toFixed(2)}%`; }
+
+for (const grp of payload.groups) {
+  const head = document.createElement("div");
+  head.className = "alloc-cat";
+  const zero = grp.allocation_pct === 0 ? " zero" : "";
+  head.innerHTML = `
+    <span class="name">${grp.name}</span>
+    <span class="pct${zero}">${grp.allocation_pct}%</span>`;
+  alloc.appendChild(head);
+
+  const table = document.createElement("table");
+  table.className = "alloc";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th class="fund">Fund Name</th>
+        <th>Expense Ratio</th>
+        <th>5-yr Return</th>
+        <th class="alloc" style="text-align:right">% Allocation</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${grp.tickers.map(sym => {
+        const tk = payload.tickers[sym];
+        const allocCls = (tk.allocation_pct ?? 0) > 0 ? "alloc has-alloc" : "alloc";
+        return `<tr>
+          <td class="fund"><span class="sym">${sym}</span></td>
+          <td class="num">${fmtER(tk.expense_ratio)}</td>
+          <td class="num ${pctClass(tk.y5_pct)}">${fmtRet(tk.y5_pct)}</td>
+          <td class="${allocCls}">${tk.allocation_pct ?? 0}%</td>
+        </tr>`;
+      }).join("")}
+    </tbody>`;
+  alloc.appendChild(table);
+}
+document.getElementById("totalAlloc").textContent = `${payload.total_allocation}%`;
 </script>
 </body>
 </html>
