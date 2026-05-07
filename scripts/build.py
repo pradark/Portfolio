@@ -190,6 +190,9 @@ def fetch(symbol: str) -> dict | None:
             "ma":    [round(float(v), 4) for v in m],
         }
 
+    def maybe(v):
+        return None if v is None else round(v, 2)
+
     return {
         "three_month": pack(close_3m.index, close_3m, ma_3m),
         "five_year":   pack(close_5y.index, close_5y, ma_5y),
@@ -197,10 +200,11 @@ def fetch(symbol: str) -> dict | None:
         "last_date":   close.index[-1].strftime("%Y-%m-%d"),
         "change_3m_pct": round(float((close_3m.iloc[-1] / close_3m.iloc[0] - 1) * 100), 2) if len(close_3m) > 1 else None,
         "change_5y_pct": round(float((close_5y.iloc[-1] / close_5y.iloc[0] - 1) * 100), 2) if len(close_5y) > 1 else None,
-        "ytd_pct":  round(_ytd_pct(close), 2)              if _ytd_pct(close)            is not None else None,
-        "y1_pct":   round(_pct_change_from_n_days(close,  365),  2) if _pct_change_from_n_days(close,  365)  is not None else None,
-        "y5_pct":   round(_pct_change_from_n_days(close,  365*5), 2) if _pct_change_from_n_days(close, 365*5) is not None else None,
-        "y10_pct":  round(_pct_change_from_n_days(close, 365*10), 2) if _pct_change_from_n_days(close, 365*10) is not None else None,
+        "m1_pct":  maybe(_pct_change_from_n_days(close,  30)),
+        "m3_pct":  maybe(_pct_change_from_n_days(close,  91)),
+        "m6_pct":  maybe(_pct_change_from_n_days(close, 182)),
+        "y1_pct":  maybe(_pct_change_from_n_days(close,  365)),
+        "y5_pct":  maybe(_pct_change_from_n_days(close,  365 * 5)),
     }
 
 
@@ -325,12 +329,15 @@ HTML_TEMPLATE = """<!doctype html>
     color: var(--muted); font-weight: 500; font-size: 11px;
     text-transform: uppercase; letter-spacing: 0.06em;
   }
+  table.alloc th.num-h { text-align: right; }
   table.alloc td.fund .sym { font-weight: 700; font-size: 15px; }
   table.alloc td.alloc {
     text-align: right; width: 110px; color: var(--muted); font-variant-numeric: tabular-nums;
   }
   table.alloc td.alloc.has-alloc { color: var(--text); font-weight: 600; }
-  table.alloc td.num { font-variant-numeric: tabular-nums; }
+  table.alloc td.num {
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
   table.alloc tbody tr:hover { background: #1a1f27; }
 
   .total-row {
@@ -504,8 +511,12 @@ for (const grp of payload.groups) {
     <thead>
       <tr>
         <th class="fund">Fund Name</th>
-        <th>Expense Ratio</th>
-        <th>5-yr Return</th>
+        <th class="num-h">Expense Ratio</th>
+        <th class="num-h">1-mo</th>
+        <th class="num-h">3-mo</th>
+        <th class="num-h">6-mo</th>
+        <th class="num-h">1-yr</th>
+        <th class="num-h">5-yr</th>
         <th class="alloc" style="text-align:right">% Allocation</th>
       </tr>
     </thead>
@@ -516,6 +527,10 @@ for (const grp of payload.groups) {
         return `<tr>
           <td class="fund"><span class="sym">${sym}</span></td>
           <td class="num">${fmtER(tk.expense_ratio)}</td>
+          <td class="num ${pctClass(tk.m1_pct)}">${fmtRet(tk.m1_pct)}</td>
+          <td class="num ${pctClass(tk.m3_pct)}">${fmtRet(tk.m3_pct)}</td>
+          <td class="num ${pctClass(tk.m6_pct)}">${fmtRet(tk.m6_pct)}</td>
+          <td class="num ${pctClass(tk.y1_pct)}">${fmtRet(tk.y1_pct)}</td>
           <td class="num ${pctClass(tk.y5_pct)}">${fmtRet(tk.y5_pct)}</td>
           <td class="${allocCls}">${tk.allocation_pct ?? 0}%</td>
         </tr>`;
