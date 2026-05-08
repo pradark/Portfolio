@@ -517,13 +517,11 @@ for (const grp of payload.groups) {
         <th class="num-h">6-mo</th>
         <th class="num-h">1-yr</th>
         <th class="num-h">5-yr</th>
-        <th class="alloc" style="text-align:right">% Allocation</th>
       </tr>
     </thead>
     <tbody>
       ${grp.tickers.map(sym => {
         const tk = payload.tickers[sym];
-        const allocCls = (tk.allocation_pct ?? 0) > 0 ? "alloc has-alloc" : "alloc";
         return `<tr>
           <td class="fund"><span class="sym">${sym}</span></td>
           <td class="num">${fmtER(tk.expense_ratio)}</td>
@@ -532,7 +530,6 @@ for (const grp of payload.groups) {
           <td class="num ${pctClass(tk.m6_pct)}">${fmtRet(tk.m6_pct)}</td>
           <td class="num ${pctClass(tk.y1_pct)}">${fmtRet(tk.y1_pct)}</td>
           <td class="num ${pctClass(tk.y5_pct)}">${fmtRet(tk.y5_pct)}</td>
-          <td class="${allocCls}">${tk.allocation_pct ?? 0}%</td>
         </tr>`;
       }).join("")}
     </tbody>`;
