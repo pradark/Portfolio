@@ -300,7 +300,8 @@ HTML_TEMPLATE = """<!doctype html>
     display: flex; align-items: baseline; justify-content: space-between;
     margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
   }
-  .title-block .sym { font-size: 18px; font-weight: 600; }
+  .title-block .sym { font-size: 18px; font-weight: 600; color: var(--text); text-decoration: none; }
+  .title-block a.sym:hover { color: var(--accent); text-decoration: underline; }
   .title-block .nm  { color: var(--muted); font-size: 13px; margin-left: 8px; }
   .stats { display: flex; gap: 20px; font-size: 13px; }
   .stats .k { color: var(--muted); }
@@ -360,7 +361,11 @@ HTML_TEMPLATE = """<!doctype html>
     opacity: 1; color: var(--accent);
   }
   table.alloc td.cat { color: var(--muted); font-size: 12px; white-space: nowrap; }
-  table.alloc td.fund .sym { font-weight: 700; font-size: 15px; display: block; }
+  table.alloc td.fund .sym {
+    font-weight: 700; font-size: 15px; display: block;
+    color: var(--text); text-decoration: none;
+  }
+  table.alloc td.fund a.sym:hover { color: var(--accent); text-decoration: underline; }
   table.alloc td.fund .nm  { color: var(--muted); font-size: 12px; display: block; margin-top: 2px; }
   table.alloc td.num { text-align: right; font-variant-numeric: tabular-nums; }
   table.alloc tbody tr:hover { background: #1a1f27; }
@@ -468,7 +473,7 @@ function renderCard(sym, tk, container) {
   card.innerHTML = `
     <div class="card-head">
       <div class="title-block">
-        <span class="sym">${sym}</span><span class="nm">${tk.name}</span>
+        <a class="sym" href="https://finance.yahoo.com/quote/${sym}/" target="_blank" rel="noopener noreferrer">${sym}</a><span class="nm">${tk.name}</span>
       </div>
       <div class="stats">
         <div><span class="k">Last</span> $${tk.last_price.toFixed(2)} <span class="k">(${tk.last_date})</span></div>
@@ -558,6 +563,7 @@ let sortKey = "_category_ord";   // default: keep category grouping
 let sortDir = "asc";
 
 // filter state
+let fltSearch = "";
 let fltSector = "";
 let fltPeriod = "y1_pct";
 let fltMin    = null;
@@ -571,7 +577,15 @@ const PERIOD_LABELS = {
 };
 
 function filteredRows() {
+  const q = fltSearch.trim().toLowerCase();
   return allocRows.filter(r => {
+    if (q) {
+      const hay = `${r.sym} ${r.name} ${r.category}`.toLowerCase();
+      // every whitespace-separated term must appear
+      for (const term of q.split(/\s+/)) {
+        if (!hay.includes(term)) return false;
+      }
+    }
     if (fltSector && r.category !== fltSector) return false;
     if (fltMin !== null || fltMax !== null) {
       const v = r[fltPeriod];
@@ -620,6 +634,10 @@ function buildFilterUI() {
 
   const bar = document.getElementById("alloc-filters");
   bar.innerHTML = `
+    <div class="filter-group" style="flex: 1; min-width: 220px;">
+      <label for="flt-search">Search</label>
+      <input id="flt-search" type="search" placeholder="ticker, fund name, or keyword" style="width: 100%;">
+    </div>
     <div class="filter-group">
       <label for="flt-sector">Sector</label>
       <select id="flt-sector">${sectorOpts}</select>
@@ -647,6 +665,9 @@ function buildFilterUI() {
     <button id="flt-reset" class="reset-btn" type="button">Reset</button>
   `;
 
+  document.getElementById("flt-search").addEventListener("input", (e) => {
+    fltSearch = e.target.value; renderAllocTable();
+  });
   document.getElementById("flt-sector").addEventListener("change", (e) => {
     fltSector = e.target.value; renderAllocTable();
   });
@@ -672,9 +693,10 @@ function buildFilterUI() {
   document.getElementById("flt-er-min").addEventListener("input", onErMinMax);
   document.getElementById("flt-er-max").addEventListener("input", onErMinMax);
   document.getElementById("flt-reset").addEventListener("click", () => {
-    fltSector = ""; fltPeriod = "y1_pct";
+    fltSearch = ""; fltSector = ""; fltPeriod = "y1_pct";
     fltMin = null; fltMax = null;
     fltErMin = null; fltErMax = null;
+    document.getElementById("flt-search").value = "";
     document.getElementById("flt-sector").value = "";
     document.getElementById("flt-period").value = "y1_pct";
     document.getElementById("flt-min").value = "";
@@ -687,12 +709,13 @@ function buildFilterUI() {
 
 function updateAllocStatus(shown, total) {
   const status = document.getElementById("alloc-status");
-  const filtersActive = fltSector !== "" || fltMin !== null || fltMax !== null
+  const filtersActive = fltSearch !== "" || fltSector !== "" || fltMin !== null || fltMax !== null
                         || fltErMin !== null || fltErMax !== null;
   if (!filtersActive) {
     status.textContent = `${total} fund${total === 1 ? "" : "s"}`;
   } else {
     const parts = [];
+    if (fltSearch) parts.push(`search: "${fltSearch}"`);
     if (fltSector) parts.push(`sector: ${fltSector}`);
     if (fltMin !== null || fltMax !== null) {
       const lbl = PERIOD_LABELS[fltPeriod];
@@ -730,7 +753,7 @@ function renderAllocTable() {
       ${rows.map(r => `
         <tr>
           <td class="cat">${r.category}</td>
-          <td class="fund"><span class="sym">${r.sym}</span><span class="nm">${r.name}</span></td>
+          <td class="fund"><a class="sym" href="https://finance.yahoo.com/quote/${r.sym}/" target="_blank" rel="noopener noreferrer">${r.sym}</a><span class="nm">${r.name}</span></td>
           <td class="num">${fmtER(r.expense_ratio)}</td>
           <td class="num ${pctClass(r.m1_pct)}">${fmtRet(r.m1_pct)}</td>
           <td class="num ${pctClass(r.m3_pct)}">${fmtRet(r.m3_pct)}</td>
