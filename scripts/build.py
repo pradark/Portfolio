@@ -313,31 +313,29 @@ HTML_TEMPLATE = """<!doctype html>
   }
 
   /* allocation table (allocation view) */
-  .alloc-cat {
-    display: flex; align-items: baseline; gap: 12px;
-    margin: 26px 0 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
-  }
-  .alloc-cat .name { font-size: 16px; font-weight: 600; }
-  .alloc-cat .pct  { color: var(--accent); font-weight: 600; font-size: 14px; }
-  .alloc-cat .pct.zero { color: var(--muted); font-weight: 400; }
-
   table.alloc { width: 100%; border-collapse: collapse; font-size: 14px; }
   table.alloc th, table.alloc td {
-    padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--border);
+    padding: 12px 12px; text-align: left; border-bottom: 1px solid var(--border);
   }
-  table.alloc th {
+  table.alloc thead th {
     color: var(--muted); font-weight: 500; font-size: 11px;
     text-transform: uppercase; letter-spacing: 0.06em;
+    cursor: pointer; user-select: none; white-space: nowrap;
+    position: sticky; top: 0; background: var(--bg); z-index: 1;
   }
-  table.alloc th.num-h { text-align: right; }
+  table.alloc thead th:hover { color: var(--text); }
+  table.alloc thead th.num-h { text-align: right; }
+  table.alloc thead th .arr {
+    display: inline-block; width: 12px; opacity: 0.4; margin-left: 4px;
+  }
+  table.alloc thead th.sort-asc .arr,
+  table.alloc thead th.sort-desc .arr {
+    opacity: 1; color: var(--accent);
+  }
+  table.alloc td.cat { color: var(--muted); font-size: 12px; white-space: nowrap; }
   table.alloc td.fund .sym { font-weight: 700; font-size: 15px; }
-  table.alloc td.alloc {
-    text-align: right; width: 110px; color: var(--muted); font-variant-numeric: tabular-nums;
-  }
-  table.alloc td.alloc.has-alloc { color: var(--text); font-weight: 600; }
-  table.alloc td.num {
-    text-align: right; font-variant-numeric: tabular-nums;
-  }
+  table.alloc td.fund .nm { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  table.alloc td.num { text-align: right; font-variant-numeric: tabular-nums; }
   table.alloc tbody tr:hover { background: #1a1f27; }
 
   .total-row {
@@ -490,51 +488,116 @@ for (const grp of payload.groups) {
 }
 for (const el of document.querySelectorAll(".chart")) observer.observe(el);
 
-/* ---------- allocation view ---------- */
+/* ---------- allocation view: single sortable table ---------- */
 const alloc = document.getElementById("alloc");
 
 function fmtER(v)   { return v == null ? "—" : `${v.toFixed(2)}%`; }
 function fmtRet(v)  { return v == null ? "—" : `${v.toFixed(2)}%`; }
 
+// Flatten all tickers into rows with their category attached.
+// Default order = the order categories appear in payload.groups.
+const allocRows = [];
+let categoryOrder = 0;
 for (const grp of payload.groups) {
-  const head = document.createElement("div");
-  head.className = "alloc-cat";
-  const zero = grp.allocation_pct === 0 ? " zero" : "";
-  head.innerHTML = `
-    <span class="name">${grp.name}</span>
-    <span class="pct${zero}">${grp.allocation_pct}%</span>`;
-  alloc.appendChild(head);
+  for (const sym of grp.tickers) {
+    const tk = payload.tickers[sym];
+    allocRows.push({
+      sym, name: tk.name,
+      category: grp.name,
+      _category_ord: categoryOrder,
+      expense_ratio: tk.expense_ratio,
+      m1_pct: tk.m1_pct, m3_pct: tk.m3_pct, m6_pct: tk.m6_pct,
+      y1_pct: tk.y1_pct, y5_pct: tk.y5_pct,
+    });
+  }
+  categoryOrder++;
+}
 
-  const table = document.createElement("table");
-  table.className = "alloc";
-  table.innerHTML = `
+// Columns: { key, label, type, align, default_dir }
+const ALLOC_COLS = [
+  { key: "_category_ord", label: "Category",      type: "cat",  cls: "cat",  alignR: false, defaultDesc: false, sortKey: "_category_ord" },
+  { key: "sym",           label: "Fund Name",     type: "fund", cls: "fund", alignR: false, defaultDesc: false, sortKey: "sym" },
+  { key: "expense_ratio", label: "Expense Ratio", type: "num",  cls: "num",  alignR: true,  defaultDesc: false, sortKey: "expense_ratio" },
+  { key: "m1_pct",        label: "1-mo",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "m1_pct" },
+  { key: "m3_pct",        label: "3-mo",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "m3_pct" },
+  { key: "m6_pct",        label: "6-mo",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "m6_pct" },
+  { key: "y1_pct",        label: "1-yr",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "y1_pct" },
+  { key: "y5_pct",        label: "5-yr",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "y5_pct" },
+];
+
+let sortKey = "_category_ord";   // default: keep category grouping
+let sortDir = "asc";
+
+function sortedRows() {
+  const dirMul = sortDir === "asc" ? 1 : -1;
+  const k = sortKey;
+  const arr = allocRows.slice();
+  arr.sort((a, b) => {
+    const av = a[k], bv = b[k];
+    // nulls always sort last regardless of direction
+    const aN = av == null, bN = bv == null;
+    if (aN && bN) return 0;
+    if (aN) return 1;
+    if (bN) return -1;
+    let cmp;
+    if (typeof av === "string") cmp = av.localeCompare(bv);
+    else cmp = av - bv;
+    if (cmp !== 0) return cmp * dirMul;
+    // tiebreak: when sorting by category keep alphabetic by symbol
+    return a.sym.localeCompare(b.sym);
+  });
+  return arr;
+}
+
+function renderAllocTable() {
+  const rows = sortedRows();
+
+  const thead = `
     <thead>
       <tr>
-        <th class="fund">Fund Name</th>
-        <th class="num-h">Expense Ratio</th>
-        <th class="num-h">1-mo</th>
-        <th class="num-h">3-mo</th>
-        <th class="num-h">6-mo</th>
-        <th class="num-h">1-yr</th>
-        <th class="num-h">5-yr</th>
+        ${ALLOC_COLS.map(c => {
+          const sortCls = c.sortKey === sortKey ? (sortDir === "asc" ? "sort-asc" : "sort-desc") : "";
+          const arr = c.sortKey === sortKey ? (sortDir === "asc" ? "▲" : "▼") : "";
+          const align = c.alignR ? " num-h" : "";
+          return `<th class="${align}${sortCls ? " " + sortCls : ""}" data-sort="${c.sortKey}">${c.label}<span class="arr">${arr}</span></th>`;
+        }).join("")}
       </tr>
-    </thead>
+    </thead>`;
+
+  const tbody = `
     <tbody>
-      ${grp.tickers.map(sym => {
-        const tk = payload.tickers[sym];
-        return `<tr>
-          <td class="fund"><span class="sym">${sym}</span></td>
-          <td class="num">${fmtER(tk.expense_ratio)}</td>
-          <td class="num ${pctClass(tk.m1_pct)}">${fmtRet(tk.m1_pct)}</td>
-          <td class="num ${pctClass(tk.m3_pct)}">${fmtRet(tk.m3_pct)}</td>
-          <td class="num ${pctClass(tk.m6_pct)}">${fmtRet(tk.m6_pct)}</td>
-          <td class="num ${pctClass(tk.y1_pct)}">${fmtRet(tk.y1_pct)}</td>
-          <td class="num ${pctClass(tk.y5_pct)}">${fmtRet(tk.y5_pct)}</td>
-        </tr>`;
-      }).join("")}
+      ${rows.map(r => `
+        <tr>
+          <td class="cat">${r.category}</td>
+          <td class="fund"><span class="sym">${r.sym}</span><span class="nm">${r.name}</span></td>
+          <td class="num">${fmtER(r.expense_ratio)}</td>
+          <td class="num ${pctClass(r.m1_pct)}">${fmtRet(r.m1_pct)}</td>
+          <td class="num ${pctClass(r.m3_pct)}">${fmtRet(r.m3_pct)}</td>
+          <td class="num ${pctClass(r.m6_pct)}">${fmtRet(r.m6_pct)}</td>
+          <td class="num ${pctClass(r.y1_pct)}">${fmtRet(r.y1_pct)}</td>
+          <td class="num ${pctClass(r.y5_pct)}">${fmtRet(r.y5_pct)}</td>
+        </tr>`).join("")}
     </tbody>`;
-  alloc.appendChild(table);
+
+  alloc.innerHTML = `<table class="alloc">${thead}${tbody}</table>`;
+
+  // Wire up header clicks
+  for (const th of alloc.querySelectorAll("thead th")) {
+    th.addEventListener("click", () => {
+      const k = th.dataset.sort;
+      const col = ALLOC_COLS.find(c => c.sortKey === k);
+      if (sortKey === k) {
+        sortDir = sortDir === "asc" ? "desc" : "asc";
+      } else {
+        sortKey = k;
+        sortDir = col.defaultDesc ? "desc" : "asc";
+      }
+      renderAllocTable();
+    });
+  }
 }
+
+renderAllocTable();
 document.getElementById("totalAlloc").textContent = `${payload.total_allocation}%`;
 </script>
 </body>
