@@ -333,8 +333,8 @@ HTML_TEMPLATE = """<!doctype html>
     opacity: 1; color: var(--accent);
   }
   table.alloc td.cat { color: var(--muted); font-size: 12px; white-space: nowrap; }
-  table.alloc td.fund .sym { font-weight: 700; font-size: 15px; }
-  table.alloc td.fund .nm { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  table.alloc td.fund .sym { font-weight: 700; font-size: 15px; display: block; }
+  table.alloc td.fund .nm  { color: var(--muted); font-size: 12px; display: block; margin-top: 2px; }
   table.alloc td.num { text-align: right; font-variant-numeric: tabular-nums; }
   table.alloc tbody tr:hover { background: #1a1f27; }
 
