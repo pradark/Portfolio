@@ -404,14 +404,24 @@ HTML_TEMPLATE = """<!doctype html>
   .modal-head a.modal-newtab:hover,
   .modal-head button.modal-close:hover { background: var(--accent-bg); }
   .modal-head button.modal-close { font-size: 22px; line-height: 1; padding: 0 10px; }
-  .modal-tv { flex: 1; min-height: 0; background: #171b22; }
-  .modal-tv iframe { width: 100% !important; height: 100% !important; border: 0; }
-  .modal-fallback {
-    display: none; flex: 1; align-items: center; justify-content: center;
-    flex-direction: column; gap: 12px; padding: 40px; text-align: center;
-    color: var(--muted);
+  .modal-body { flex: 1; min-height: 0; padding: 16px 18px; overflow-y: auto; }
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px; margin-bottom: 16px;
   }
-  .modal-fallback.show { display: flex; }
+  .stat-tile {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .stat-tile .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat-tile .val { font-size: 16px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .modal-chart { height: 320px; margin-bottom: 16px; }
+  .modal-links { display: flex; gap: 12px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--border); margin-top: 8px; }
+  .modal-links a {
+    color: var(--accent); text-decoration: none; font-size: 13px;
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  }
+  .modal-links a:hover { background: var(--accent-bg); }
 </style>
 </head>
 <body>
@@ -446,20 +456,15 @@ HTML_TEMPLATE = """<!doctype html>
 
 <footer>Source: Yahoo Finance. Rebuilt daily by GitHub Actions.</footer>
 
-<!-- In-page modal: TradingView Advanced Chart widget -->
+<!-- In-page modal: detail view rendered from local data (works for all tickers) -->
 <div id="modal" class="modal hidden" aria-hidden="true">
   <div class="modal-bg"></div>
   <div class="modal-dialog" role="dialog" aria-labelledby="modal-title">
     <div class="modal-head">
       <span id="modal-title">—</span>
-      <a class="modal-newtab" id="modal-newtab" target="_blank" rel="noopener noreferrer">Open on Yahoo Finance ↗</a>
       <button class="modal-close" id="modal-close" type="button" aria-label="Close">×</button>
     </div>
-    <div id="modal-tv" class="modal-tv"></div>
-    <div id="modal-fallback" class="modal-fallback">
-      <div>Could not load the chart.</div>
-      <div>Use the <strong>Open on Yahoo Finance ↗</strong> link above instead.</div>
-    </div>
+    <div id="modal-body" class="modal-body"></div>
   </div>
 </div>
 
@@ -467,78 +472,85 @@ HTML_TEMPLATE = """<!doctype html>
 <script>
 const payload = JSON.parse(document.getElementById("payload").textContent);
 
-/* ---------- in-page ticker modal (TradingView widget) ---------- */
-const modalEl       = document.getElementById("modal");
-const modalTvHost   = document.getElementById("modal-tv");
-const modalFallback = document.getElementById("modal-fallback");
-const modalTitle    = document.getElementById("modal-title");
-const modalNewTab   = document.getElementById("modal-newtab");
+/* ---------- in-page ticker modal (rendered from local data) ---------- */
+const modalEl    = document.getElementById("modal");
+const modalBody  = document.getElementById("modal-body");
+const modalTitle = document.getElementById("modal-title");
 
-let _tvScriptPromise = null;
-function loadTradingView() {
-  if (window.TradingView) return Promise.resolve();
-  if (_tvScriptPromise) return _tvScriptPromise;
-  _tvScriptPromise = new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://s3.tradingview.com/tv.js";
-    s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("TradingView script failed to load"));
-    document.head.appendChild(s);
-  });
-  return _tvScriptPromise;
+function fmtSignedPct(v) {
+  if (v == null) return "—";
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${v.toFixed(2)}%`;
 }
 
-async function openTickerModal(sym, name) {
-  const yahooUrl = `https://finance.yahoo.com/quote/${sym}/`;
-  modalTitle.textContent = name ? `${sym} — ${name}` : sym;
-  modalNewTab.href = yahooUrl;
-  modalFallback.classList.remove("show");
-  modalTvHost.innerHTML = "";
-  // Inner div TradingView will mount into; give it a unique id each time.
-  const containerId = `tv-${sym}-${Date.now()}`;
-  const inner = document.createElement("div");
-  inner.id = containerId;
-  inner.style.height = "100%";
-  inner.style.width  = "100%";
-  modalTvHost.appendChild(inner);
+function tile(label, value, cls = "") {
+  return `<div class="stat-tile">
+    <div class="lbl">${label}</div>
+    <div class="val ${cls}">${value}</div>
+  </div>`;
+}
+
+function modalChartLayout(title) {
+  return {
+    paper_bgcolor: "#171b22", plot_bgcolor: "#171b22",
+    font: { color: "#e7eaee", size: 11 },
+    margin: { l: 56, r: 18, t: 30, b: 36 },
+    xaxis: { gridcolor: "#242a33", linecolor: "#242a33", zerolinecolor: "#242a33" },
+    yaxis: { gridcolor: "#242a33", linecolor: "#242a33", zerolinecolor: "#242a33", tickprefix: "$" },
+    legend: { orientation: "h", y: -0.18, x: 0 },
+    hovermode: "x unified",
+    title: { text: title, font: { size: 14 }, x: 0.01 },
+  };
+}
+
+function openTickerModal(sym /* string */) {
+  const tk = payload.tickers[sym];
+  if (!tk) return;
+  const name = tk.name || "";
+  modalTitle.textContent = `${sym} — ${name}`;
+
+  // External links — multiple sources, user can pick whichever works for this ticker.
+  const links = [
+    ["Yahoo Finance",  `https://finance.yahoo.com/quote/${sym}/`],
+    ["Stockanalysis",  `https://stockanalysis.com/quote/${sym}/`],
+    ["TradingView",    `https://www.tradingview.com/symbols/${sym}/`],
+    ["Google Finance", `https://www.google.com/finance/quote/${sym}`],
+    ["Morningstar",    `https://www.morningstar.com/funds/xnas/${sym}/quote`],
+  ];
+
+  modalBody.innerHTML = `
+    <div class="stats-grid">
+      ${tile("Last Price",    `$${tk.last_price.toFixed(2)}`)}
+      ${tile("As of",         tk.last_date)}
+      ${tile("Expense Ratio", tk.expense_ratio == null ? "—" : `${tk.expense_ratio.toFixed(2)}%`)}
+      ${tile("1-mo Return",   fmtSignedPct(tk.m1_pct), pctClass(tk.m1_pct))}
+      ${tile("3-mo Return",   fmtSignedPct(tk.m3_pct), pctClass(tk.m3_pct))}
+      ${tile("6-mo Return",   fmtSignedPct(tk.m6_pct), pctClass(tk.m6_pct))}
+      ${tile("1-yr Return",   fmtSignedPct(tk.y1_pct), pctClass(tk.y1_pct))}
+      ${tile("5-yr Return",   fmtSignedPct(tk.y5_pct), pctClass(tk.y5_pct))}
+    </div>
+    <div id="modal-chart-5y" class="modal-chart"></div>
+    <div id="modal-chart-3m" class="modal-chart"></div>
+    <div class="modal-links">
+      <span style="color:var(--muted); font-size:12px; align-self:center;">View on:</span>
+      ${links.map(([lbl, url]) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${lbl} ↗</a>`).join("")}
+    </div>
+  `;
+
+  // Render charts (uses Plotly which is already loaded for the Charts tab)
+  const c5 = document.getElementById("modal-chart-5y");
+  const c3 = document.getElementById("modal-chart-3m");
+  Plotly.newPlot(c5, mkTraces(tk.five_year),   modalChartLayout("Last 5 years"),  { displayModeBar: false, responsive: true });
+  Plotly.newPlot(c3, mkTraces(tk.three_month), modalChartLayout("Last 3 months"), { displayModeBar: false, responsive: true });
 
   modalEl.classList.remove("hidden");
   modalEl.setAttribute("aria-hidden", "false");
-
-  try {
-    await loadTradingView();
-    if (!window.TradingView) throw new Error("TradingView global missing");
-    new TradingView.widget({
-      autosize:        true,
-      symbol:          sym,
-      interval:        "D",
-      timezone:        "Etc/UTC",
-      theme:           "dark",
-      style:           "1",
-      locale:          "en",
-      toolbar_bg:      "#171b22",
-      backgroundColor: "#171b22",
-      gridColor:       "#242a33",
-      enable_publishing: false,
-      allow_symbol_change: true,
-      hide_side_toolbar: false,
-      withdateranges:   true,
-      details:          true,
-      container_id:     containerId,
-    });
-  } catch (e) {
-    console.error("TradingView load failed:", e);
-    modalTvHost.innerHTML = "";
-    modalFallback.classList.add("show");
-  }
 }
 
 function closeTickerModal() {
   modalEl.classList.add("hidden");
   modalEl.setAttribute("aria-hidden", "true");
-  // Tear down the widget so it doesn't keep streaming in the background.
-  modalTvHost.innerHTML = "";
+  modalBody.innerHTML = "";
 }
 
 document.getElementById("modal-close").addEventListener("click", closeTickerModal);
@@ -552,9 +564,7 @@ document.body.addEventListener("click", (e) => {
   const a = e.target.closest("a.sym");
   if (!a) return;
   e.preventDefault();
-  const sym = a.textContent.trim();
-  const name = a.dataset.name || "";
-  openTickerModal(sym, name);
+  openTickerModal(a.textContent.trim());
 });
 
 /* ---------- tab switching ---------- */
