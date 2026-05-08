@@ -1,5 +1,6 @@
 name: Update dashboard
 
+# Manual rerun trigger 2026-05-08
 on:
   # 05:00 UTC every day = 1:00 AM US Eastern (EDT).
   # Note: GitHub Actions cron is fixed-UTC, so during EST (Nov–Mar) this fires at 12:00 AM ET.
