@@ -312,7 +312,34 @@ HTML_TEMPLATE = """<!doctype html>
     display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px;
   }
 
-  /* allocation table (allocation view) */
+  /* filter bar (performance view) */
+  .filters {
+    display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap;
+    margin: 0 0 14px; padding: 12px 14px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  .filter-group { display: flex; flex-direction: column; gap: 4px; }
+  .filter-group label {
+    color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .filter-group select, .filter-group input {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; font: inherit;
+  }
+  .filter-group select { min-width: 180px; }
+  .filter-group input  { width: 90px; }
+  .filter-group select:focus, .filter-group input:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .reset-btn {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 14px; cursor: pointer;
+    font: inherit;
+  }
+  .reset-btn:hover { color: var(--text); border-color: var(--text); }
+  .alloc-status { color: var(--muted); font-size: 12px; margin: 0 4px 8px; }
+
+  /* allocation table (performance view) */
   table.alloc { width: 100%; border-collapse: collapse; font-size: 14px; }
   table.alloc th, table.alloc td {
     padding: 12px 12px; text-align: left; border-bottom: 1px solid var(--border);
@@ -371,6 +398,8 @@ HTML_TEMPLATE = """<!doctype html>
 </div>
 
 <div id="view-alloc" class="view">
+  <div id="alloc-filters" class="filters"></div>
+  <div id="alloc-status" class="alloc-status"></div>
   <div id="alloc"></div>
   <div class="total-row">
     <span class="label">Total Allocation</span>
@@ -528,10 +557,42 @@ const ALLOC_COLS = [
 let sortKey = "_category_ord";   // default: keep category grouping
 let sortDir = "asc";
 
+// filter state
+let fltSector = "";
+let fltPeriod = "y1_pct";
+let fltMin    = null;
+let fltMax    = null;
+let fltErMin  = null;
+let fltErMax  = null;
+
+const PERIOD_LABELS = {
+  m1_pct: "1-mo", m3_pct: "3-mo", m6_pct: "6-mo",
+  y1_pct: "1-yr", y5_pct: "5-yr",
+};
+
+function filteredRows() {
+  return allocRows.filter(r => {
+    if (fltSector && r.category !== fltSector) return false;
+    if (fltMin !== null || fltMax !== null) {
+      const v = r[fltPeriod];
+      if (v == null) return false;
+      if (fltMin !== null && v < fltMin) return false;
+      if (fltMax !== null && v > fltMax) return false;
+    }
+    if (fltErMin !== null || fltErMax !== null) {
+      const v = r.expense_ratio;
+      if (v == null) return false;
+      if (fltErMin !== null && v < fltErMin) return false;
+      if (fltErMax !== null && v > fltErMax) return false;
+    }
+    return true;
+  });
+}
+
 function sortedRows() {
   const dirMul = sortDir === "asc" ? 1 : -1;
   const k = sortKey;
-  const arr = allocRows.slice();
+  const arr = filteredRows();
   arr.sort((a, b) => {
     const av = a[k], bv = b[k];
     // nulls always sort last regardless of direction
@@ -549,8 +610,108 @@ function sortedRows() {
   return arr;
 }
 
+/* ---------- filter UI ---------- */
+function buildFilterUI() {
+  const sectorOpts = `<option value="">All sectors</option>` +
+    payload.groups.map(g => `<option value="${g.name}">${g.name}</option>`).join("");
+  const periodOpts = Object.entries(PERIOD_LABELS)
+    .map(([k, label]) => `<option value="${k}"${k === fltPeriod ? " selected" : ""}>${label} return</option>`)
+    .join("");
+
+  const bar = document.getElementById("alloc-filters");
+  bar.innerHTML = `
+    <div class="filter-group">
+      <label for="flt-sector">Sector</label>
+      <select id="flt-sector">${sectorOpts}</select>
+    </div>
+    <div class="filter-group">
+      <label for="flt-period">Return period</label>
+      <select id="flt-period">${periodOpts}</select>
+    </div>
+    <div class="filter-group">
+      <label for="flt-min">Return Min %</label>
+      <input id="flt-min" type="number" step="0.1" placeholder="any">
+    </div>
+    <div class="filter-group">
+      <label for="flt-max">Return Max %</label>
+      <input id="flt-max" type="number" step="0.1" placeholder="any">
+    </div>
+    <div class="filter-group">
+      <label for="flt-er-min">Expense Min %</label>
+      <input id="flt-er-min" type="number" step="0.01" placeholder="any">
+    </div>
+    <div class="filter-group">
+      <label for="flt-er-max">Expense Max %</label>
+      <input id="flt-er-max" type="number" step="0.01" placeholder="any">
+    </div>
+    <button id="flt-reset" class="reset-btn" type="button">Reset</button>
+  `;
+
+  document.getElementById("flt-sector").addEventListener("change", (e) => {
+    fltSector = e.target.value; renderAllocTable();
+  });
+  document.getElementById("flt-period").addEventListener("change", (e) => {
+    fltPeriod = e.target.value; renderAllocTable();
+  });
+  const onMinMax = () => {
+    const mn = document.getElementById("flt-min").value.trim();
+    const mx = document.getElementById("flt-max").value.trim();
+    fltMin = mn === "" ? null : parseFloat(mn);
+    fltMax = mx === "" ? null : parseFloat(mx);
+    renderAllocTable();
+  };
+  const onErMinMax = () => {
+    const mn = document.getElementById("flt-er-min").value.trim();
+    const mx = document.getElementById("flt-er-max").value.trim();
+    fltErMin = mn === "" ? null : parseFloat(mn);
+    fltErMax = mx === "" ? null : parseFloat(mx);
+    renderAllocTable();
+  };
+  document.getElementById("flt-min").addEventListener("input", onMinMax);
+  document.getElementById("flt-max").addEventListener("input", onMinMax);
+  document.getElementById("flt-er-min").addEventListener("input", onErMinMax);
+  document.getElementById("flt-er-max").addEventListener("input", onErMinMax);
+  document.getElementById("flt-reset").addEventListener("click", () => {
+    fltSector = ""; fltPeriod = "y1_pct";
+    fltMin = null; fltMax = null;
+    fltErMin = null; fltErMax = null;
+    document.getElementById("flt-sector").value = "";
+    document.getElementById("flt-period").value = "y1_pct";
+    document.getElementById("flt-min").value = "";
+    document.getElementById("flt-max").value = "";
+    document.getElementById("flt-er-min").value = "";
+    document.getElementById("flt-er-max").value = "";
+    renderAllocTable();
+  });
+}
+
+function updateAllocStatus(shown, total) {
+  const status = document.getElementById("alloc-status");
+  const filtersActive = fltSector !== "" || fltMin !== null || fltMax !== null
+                        || fltErMin !== null || fltErMax !== null;
+  if (!filtersActive) {
+    status.textContent = `${total} fund${total === 1 ? "" : "s"}`;
+  } else {
+    const parts = [];
+    if (fltSector) parts.push(`sector: ${fltSector}`);
+    if (fltMin !== null || fltMax !== null) {
+      const lbl = PERIOD_LABELS[fltPeriod];
+      const lo = fltMin !== null ? `${fltMin}%` : "any";
+      const hi = fltMax !== null ? `${fltMax}%` : "any";
+      parts.push(`${lbl} return ${lo}–${hi}`);
+    }
+    if (fltErMin !== null || fltErMax !== null) {
+      const lo = fltErMin !== null ? `${fltErMin}%` : "any";
+      const hi = fltErMax !== null ? `${fltErMax}%` : "any";
+      parts.push(`expense ${lo}–${hi}`);
+    }
+    status.textContent = `Showing ${shown} of ${total} funds — filters: ${parts.join(", ")}`;
+  }
+}
+
 function renderAllocTable() {
   const rows = sortedRows();
+  updateAllocStatus(rows.length, allocRows.length);
 
   const thead = `
     <thead>
@@ -597,6 +758,7 @@ function renderAllocTable() {
   }
 }
 
+buildFilterUI();
 renderAllocTable();
 document.getElementById("totalAlloc").textContent = `${payload.total_allocation}%`;
 </script>
