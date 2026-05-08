@@ -22,25 +22,12 @@ Tickers tracked, by category:
 
 Data comes from Yahoo Finance via the `yfinance` library. The workflow runs every weekday at 22:30 UTC (~1.5h after US market close) and can also be triggered manually from the Actions tab.
 
-## Architecture
+## Enable GitHub Pages (one-time)
 
-This repo is **private**. It builds the dashboard and deploys `index.html` to a separate **public** repo `pradark/portfolio-site`, whose Pages serves the live URL:
+1. Repo → **Settings → Pages** → Source: **GitHub Actions**.
+2. Go to the **Actions** tab → pick **Update dashboard** → **Run workflow** once to do the first real data fetch.
 
-- Live dashboard: https://pradark.github.io/portfolio-site/
-- Deploy mechanism: SSH deploy key. The workflow secret `SITE_DEPLOY_KEY` holds the private key; the matching public key is installed as a write-enabled deploy key on `pradark/portfolio-site`.
-
-## One-time setup
-
-1. Create a new **public** repo `pradark/portfolio-site` (no README/license).
-2. On your Mac:
-   ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/portfolio-site-deploy -N "" -C "portfolio-site deploy"
-   ```
-3. Add the **public** key to `pradark/portfolio-site` → Settings → Deploy keys → **Add deploy key**, paste contents of `~/.ssh/portfolio-site-deploy.pub`, **check "Allow write access"**.
-4. Add the **private** key to this repo → Settings → Secrets and variables → Actions → **New repository secret**, name `SITE_DEPLOY_KEY`, paste contents of `~/.ssh/portfolio-site-deploy` (the file without `.pub`).
-5. On `pradark/portfolio-site` → Settings → Pages → Source: **Deploy from a branch**, branch `main`, folder `/ (root)`.
-6. Trigger this repo's workflow once: Actions → Update dashboard → **Run workflow**. After it succeeds, the public site is live.
-7. (Optional) Make this repo private: Settings → Danger Zone → Change repository visibility.
+Live URL: https://pradark.github.io/Portfolio/
 
 ## Local preview
 
