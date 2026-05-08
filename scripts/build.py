@@ -404,7 +404,8 @@ HTML_TEMPLATE = """<!doctype html>
   .modal-head a.modal-newtab:hover,
   .modal-head button.modal-close:hover { background: var(--accent-bg); }
   .modal-head button.modal-close { font-size: 22px; line-height: 1; padding: 0 10px; }
-  .modal-iframe { flex: 1; border: 0; background: #fff; }
+  .modal-tv { flex: 1; min-height: 0; background: #171b22; }
+  .modal-tv iframe { width: 100% !important; height: 100% !important; border: 0; }
   .modal-fallback {
     display: none; flex: 1; align-items: center; justify-content: center;
     flex-direction: column; gap: 12px; padding: 40px; text-align: center;
@@ -445,19 +446,19 @@ HTML_TEMPLATE = """<!doctype html>
 
 <footer>Source: Yahoo Finance. Rebuilt daily by GitHub Actions.</footer>
 
-<!-- In-page modal for ticker pages -->
+<!-- In-page modal: TradingView Advanced Chart widget -->
 <div id="modal" class="modal hidden" aria-hidden="true">
   <div class="modal-bg"></div>
   <div class="modal-dialog" role="dialog" aria-labelledby="modal-title">
     <div class="modal-head">
       <span id="modal-title">—</span>
-      <a class="modal-newtab" id="modal-newtab" target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>
+      <a class="modal-newtab" id="modal-newtab" target="_blank" rel="noopener noreferrer">Open on Yahoo Finance ↗</a>
       <button class="modal-close" id="modal-close" type="button" aria-label="Close">×</button>
     </div>
-    <iframe id="modal-iframe" class="modal-iframe" referrerpolicy="no-referrer"></iframe>
+    <div id="modal-tv" class="modal-tv"></div>
     <div id="modal-fallback" class="modal-fallback">
-      <div>Yahoo Finance refused to load inside this page.</div>
-      <div>Use the <strong>Open in new tab ↗</strong> link above to view it.</div>
+      <div>Could not load the chart.</div>
+      <div>Use the <strong>Open on Yahoo Finance ↗</strong> link above instead.</div>
     </div>
   </div>
 </div>
@@ -466,40 +467,78 @@ HTML_TEMPLATE = """<!doctype html>
 <script>
 const payload = JSON.parse(document.getElementById("payload").textContent);
 
-/* ---------- in-page ticker modal ---------- */
+/* ---------- in-page ticker modal (TradingView widget) ---------- */
 const modalEl       = document.getElementById("modal");
-const modalIframe   = document.getElementById("modal-iframe");
+const modalTvHost   = document.getElementById("modal-tv");
 const modalFallback = document.getElementById("modal-fallback");
 const modalTitle    = document.getElementById("modal-title");
 const modalNewTab   = document.getElementById("modal-newtab");
 
-function openTickerModal(sym, name) {
-  const url = `https://finance.yahoo.com/quote/${sym}/`;
-  modalTitle.textContent = `${sym} — ${name || ""}`.trim().replace(/[—\s]+$/, "");
-  modalNewTab.href = url;
+let _tvScriptPromise = null;
+function loadTradingView() {
+  if (window.TradingView) return Promise.resolve();
+  if (_tvScriptPromise) return _tvScriptPromise;
+  _tvScriptPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://s3.tradingview.com/tv.js";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("TradingView script failed to load"));
+    document.head.appendChild(s);
+  });
+  return _tvScriptPromise;
+}
+
+async function openTickerModal(sym, name) {
+  const yahooUrl = `https://finance.yahoo.com/quote/${sym}/`;
+  modalTitle.textContent = name ? `${sym} — ${name}` : sym;
+  modalNewTab.href = yahooUrl;
   modalFallback.classList.remove("show");
-  modalIframe.style.display = "";
-  modalIframe.src = url;
+  modalTvHost.innerHTML = "";
+  // Inner div TradingView will mount into; give it a unique id each time.
+  const containerId = `tv-${sym}-${Date.now()}`;
+  const inner = document.createElement("div");
+  inner.id = containerId;
+  inner.style.height = "100%";
+  inner.style.width  = "100%";
+  modalTvHost.appendChild(inner);
+
   modalEl.classList.remove("hidden");
   modalEl.setAttribute("aria-hidden", "false");
-  // If the iframe is blocked by X-Frame-Options/CSP, the load event may never fire.
-  // Show a fallback if nothing loaded after 2.5s.
-  clearTimeout(window._modalFallbackTimer);
-  let loaded = false;
-  modalIframe.onload = () => { loaded = true; };
-  window._modalFallbackTimer = setTimeout(() => {
-    if (!loaded) {
-      modalIframe.style.display = "none";
-      modalFallback.classList.add("show");
-    }
-  }, 2500);
+
+  try {
+    await loadTradingView();
+    if (!window.TradingView) throw new Error("TradingView global missing");
+    new TradingView.widget({
+      autosize:        true,
+      symbol:          sym,
+      interval:        "D",
+      timezone:        "Etc/UTC",
+      theme:           "dark",
+      style:           "1",
+      locale:          "en",
+      toolbar_bg:      "#171b22",
+      backgroundColor: "#171b22",
+      gridColor:       "#242a33",
+      enable_publishing: false,
+      allow_symbol_change: true,
+      hide_side_toolbar: false,
+      withdateranges:   true,
+      details:          true,
+      container_id:     containerId,
+    });
+  } catch (e) {
+    console.error("TradingView load failed:", e);
+    modalTvHost.innerHTML = "";
+    modalFallback.classList.add("show");
+  }
 }
 
 function closeTickerModal() {
   modalEl.classList.add("hidden");
   modalEl.setAttribute("aria-hidden", "true");
-  modalIframe.src = "about:blank";
-  clearTimeout(window._modalFallbackTimer);
+  // Tear down the widget so it doesn't keep streaming in the background.
+  modalTvHost.innerHTML = "";
 }
 
 document.getElementById("modal-close").addEventListener("click", closeTickerModal);
