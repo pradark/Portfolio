@@ -380,6 +380,37 @@ HTML_TEMPLATE = """<!doctype html>
 
   footer { color: var(--muted); font-size: 12px; margin-top: 30px; }
   a { color: var(--accent); }
+
+  /* in-page modal for ticker pages */
+  .modal { position: fixed; inset: 0; z-index: 1000; }
+  .modal.hidden { display: none; }
+  .modal-bg { position: absolute; inset: 0; background: rgba(0,0,0,0.72); }
+  .modal-dialog {
+    position: relative; margin: 4vh auto; width: min(1200px, 94vw); height: 88vh;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .modal-head {
+    display: flex; align-items: center; gap: 14px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .modal-head #modal-title { font-weight: 600; flex: 1; font-size: 14px; }
+  .modal-head a.modal-newtab,
+  .modal-head button.modal-close {
+    color: var(--accent); background: transparent; border: 0; cursor: pointer;
+    font: inherit; text-decoration: none; padding: 4px 8px; border-radius: 6px;
+  }
+  .modal-head a.modal-newtab:hover,
+  .modal-head button.modal-close:hover { background: var(--accent-bg); }
+  .modal-head button.modal-close { font-size: 22px; line-height: 1; padding: 0 10px; }
+  .modal-iframe { flex: 1; border: 0; background: #fff; }
+  .modal-fallback {
+    display: none; flex: 1; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; padding: 40px; text-align: center;
+    color: var(--muted);
+  }
+  .modal-fallback.show { display: flex; }
 </style>
 </head>
 <body>
@@ -414,9 +445,78 @@ HTML_TEMPLATE = """<!doctype html>
 
 <footer>Source: Yahoo Finance. Rebuilt daily by GitHub Actions.</footer>
 
+<!-- In-page modal for ticker pages -->
+<div id="modal" class="modal hidden" aria-hidden="true">
+  <div class="modal-bg"></div>
+  <div class="modal-dialog" role="dialog" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <span id="modal-title">—</span>
+      <a class="modal-newtab" id="modal-newtab" target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>
+      <button class="modal-close" id="modal-close" type="button" aria-label="Close">×</button>
+    </div>
+    <iframe id="modal-iframe" class="modal-iframe" referrerpolicy="no-referrer"></iframe>
+    <div id="modal-fallback" class="modal-fallback">
+      <div>Yahoo Finance refused to load inside this page.</div>
+      <div>Use the <strong>Open in new tab ↗</strong> link above to view it.</div>
+    </div>
+  </div>
+</div>
+
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
 const payload = JSON.parse(document.getElementById("payload").textContent);
+
+/* ---------- in-page ticker modal ---------- */
+const modalEl       = document.getElementById("modal");
+const modalIframe   = document.getElementById("modal-iframe");
+const modalFallback = document.getElementById("modal-fallback");
+const modalTitle    = document.getElementById("modal-title");
+const modalNewTab   = document.getElementById("modal-newtab");
+
+function openTickerModal(sym, name) {
+  const url = `https://finance.yahoo.com/quote/${sym}/`;
+  modalTitle.textContent = `${sym} — ${name || ""}`.trim().replace(/[—\s]+$/, "");
+  modalNewTab.href = url;
+  modalFallback.classList.remove("show");
+  modalIframe.style.display = "";
+  modalIframe.src = url;
+  modalEl.classList.remove("hidden");
+  modalEl.setAttribute("aria-hidden", "false");
+  // If the iframe is blocked by X-Frame-Options/CSP, the load event may never fire.
+  // Show a fallback if nothing loaded after 2.5s.
+  clearTimeout(window._modalFallbackTimer);
+  let loaded = false;
+  modalIframe.onload = () => { loaded = true; };
+  window._modalFallbackTimer = setTimeout(() => {
+    if (!loaded) {
+      modalIframe.style.display = "none";
+      modalFallback.classList.add("show");
+    }
+  }, 2500);
+}
+
+function closeTickerModal() {
+  modalEl.classList.add("hidden");
+  modalEl.setAttribute("aria-hidden", "true");
+  modalIframe.src = "about:blank";
+  clearTimeout(window._modalFallbackTimer);
+}
+
+document.getElementById("modal-close").addEventListener("click", closeTickerModal);
+document.querySelector(".modal-bg").addEventListener("click", closeTickerModal);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !modalEl.classList.contains("hidden")) closeTickerModal();
+});
+
+// Delegate clicks on any ticker link (a.sym) anywhere on the page.
+document.body.addEventListener("click", (e) => {
+  const a = e.target.closest("a.sym");
+  if (!a) return;
+  e.preventDefault();
+  const sym = a.textContent.trim();
+  const name = a.dataset.name || "";
+  openTickerModal(sym, name);
+});
 
 /* ---------- tab switching ---------- */
 for (const btn of document.querySelectorAll(".tab")) {
@@ -473,7 +573,7 @@ function renderCard(sym, tk, container) {
   card.innerHTML = `
     <div class="card-head">
       <div class="title-block">
-        <a class="sym" href="https://finance.yahoo.com/quote/${sym}/" target="_blank" rel="noopener noreferrer">${sym}</a><span class="nm">${tk.name}</span>
+        <a class="sym" href="https://finance.yahoo.com/quote/${sym}/" data-name="${tk.name}" target="_blank" rel="noopener noreferrer">${sym}</a><span class="nm">${tk.name}</span>
       </div>
       <div class="stats">
         <div><span class="k">Last</span> $${tk.last_price.toFixed(2)} <span class="k">(${tk.last_date})</span></div>
@@ -753,7 +853,7 @@ function renderAllocTable() {
       ${rows.map(r => `
         <tr>
           <td class="cat">${r.category}</td>
-          <td class="fund"><a class="sym" href="https://finance.yahoo.com/quote/${r.sym}/" target="_blank" rel="noopener noreferrer">${r.sym}</a><span class="nm">${r.name}</span></td>
+          <td class="fund"><a class="sym" href="https://finance.yahoo.com/quote/${r.sym}/" data-name="${r.name}" target="_blank" rel="noopener noreferrer">${r.sym}</a><span class="nm">${r.name}</span></td>
           <td class="num">${fmtER(r.expense_ratio)}</td>
           <td class="num ${pctClass(r.m1_pct)}">${fmtRet(r.m1_pct)}</td>
           <td class="num ${pctClass(r.m3_pct)}">${fmtRet(r.m3_pct)}</td>
