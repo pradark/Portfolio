@@ -362,7 +362,7 @@ HTML_TEMPLATE = """<!doctype html>
 
 <div class="tabs">
   <button class="tab active" data-target="view-charts">Charts</button>
-  <button class="tab" data-target="view-alloc">Allocation</button>
+  <button class="tab" data-target="view-alloc">Performance</button>
 </div>
 
 <div id="view-charts" class="view active">
