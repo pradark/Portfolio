@@ -147,6 +147,13 @@ def _pct_change_from_n_days(close: pd.Series, days: int) -> float | None:
     return float((close.iloc[-1] / older.iloc[-1] - 1) * 100)
 
 
+def _pct_change_trading_days(close: pd.Series, n: int) -> float | None:
+    """% change vs n trading days ago (last close vs close[-n-1])."""
+    if len(close) <= n:
+        return None
+    return float((close.iloc[-1] / close.iloc[-n - 1] - 1) * 100)
+
+
 def _ytd_pct(close: pd.Series) -> float | None:
     """% change from first trading day of the current year to the latest close."""
     if close.empty:
@@ -200,6 +207,8 @@ def fetch(symbol: str) -> dict | None:
         "last_date":   close.index[-1].strftime("%Y-%m-%d"),
         "change_3m_pct": round(float((close_3m.iloc[-1] / close_3m.iloc[0] - 1) * 100), 2) if len(close_3m) > 1 else None,
         "change_5y_pct": round(float((close_5y.iloc[-1] / close_5y.iloc[0] - 1) * 100), 2) if len(close_5y) > 1 else None,
+        "d1_pct":  maybe(_pct_change_trading_days(close, 1)),
+        "w1_pct":  maybe(_pct_change_trading_days(close, 5)),
         "m1_pct":  maybe(_pct_change_from_n_days(close,  30)),
         "m3_pct":  maybe(_pct_change_from_n_days(close,  91)),
         "m6_pct":  maybe(_pct_change_from_n_days(close, 182)),
@@ -523,6 +532,8 @@ function openTickerModal(sym /* string */) {
       ${tile("Last Price",    `$${tk.last_price.toFixed(2)}`)}
       ${tile("As of",         tk.last_date)}
       ${tile("Expense Ratio", tk.expense_ratio == null ? "—" : `${tk.expense_ratio.toFixed(2)}%`)}
+      ${tile("1-day Return",  fmtSignedPct(tk.d1_pct), pctClass(tk.d1_pct))}
+      ${tile("1-week Return", fmtSignedPct(tk.w1_pct), pctClass(tk.w1_pct))}
       ${tile("1-mo Return",   fmtSignedPct(tk.m1_pct), pctClass(tk.m1_pct))}
       ${tile("3-mo Return",   fmtSignedPct(tk.m3_pct), pctClass(tk.m3_pct))}
       ${tile("6-mo Return",   fmtSignedPct(tk.m6_pct), pctClass(tk.m6_pct))}
@@ -689,6 +700,7 @@ for (const grp of payload.groups) {
       category: grp.name,
       _category_ord: categoryOrder,
       expense_ratio: tk.expense_ratio,
+      d1_pct: tk.d1_pct, w1_pct: tk.w1_pct,
       m1_pct: tk.m1_pct, m3_pct: tk.m3_pct, m6_pct: tk.m6_pct,
       y1_pct: tk.y1_pct, y5_pct: tk.y5_pct,
     });
@@ -701,6 +713,8 @@ const ALLOC_COLS = [
   { key: "_category_ord", label: "Category",      type: "cat",  cls: "cat",  alignR: false, defaultDesc: false, sortKey: "_category_ord" },
   { key: "sym",           label: "Fund Name",     type: "fund", cls: "fund", alignR: false, defaultDesc: false, sortKey: "sym" },
   { key: "expense_ratio", label: "Expense Ratio", type: "num",  cls: "num",  alignR: true,  defaultDesc: false, sortKey: "expense_ratio" },
+  { key: "d1_pct",        label: "1-day",         type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "d1_pct" },
+  { key: "w1_pct",        label: "1-week",        type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "w1_pct" },
   { key: "m1_pct",        label: "1-mo",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "m1_pct" },
   { key: "m3_pct",        label: "3-mo",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "m3_pct" },
   { key: "m6_pct",        label: "6-mo",          type: "ret",  cls: "num",  alignR: true,  defaultDesc: true,  sortKey: "m6_pct" },
@@ -721,8 +735,9 @@ let fltErMin  = null;
 let fltErMax  = null;
 
 const PERIOD_LABELS = {
-  m1_pct: "1-mo", m3_pct: "3-mo", m6_pct: "6-mo",
-  y1_pct: "1-yr", y5_pct: "5-yr",
+  d1_pct: "1-day", w1_pct: "1-week",
+  m1_pct: "1-mo",  m3_pct: "3-mo",  m6_pct: "6-mo",
+  y1_pct: "1-yr",  y5_pct: "5-yr",
 };
 
 function filteredRows() {
@@ -904,6 +919,8 @@ function renderAllocTable() {
           <td class="cat">${r.category}</td>
           <td class="fund"><a class="sym" href="https://finance.yahoo.com/quote/${r.sym}/" data-name="${r.name}" target="_blank" rel="noopener noreferrer">${r.sym}</a><span class="nm">${r.name}</span></td>
           <td class="num">${fmtER(r.expense_ratio)}</td>
+          <td class="num ${pctClass(r.d1_pct)}">${fmtRet(r.d1_pct)}</td>
+          <td class="num ${pctClass(r.w1_pct)}">${fmtRet(r.w1_pct)}</td>
           <td class="num ${pctClass(r.m1_pct)}">${fmtRet(r.m1_pct)}</td>
           <td class="num ${pctClass(r.m3_pct)}">${fmtRet(r.m3_pct)}</td>
           <td class="num ${pctClass(r.m6_pct)}">${fmtRet(r.m6_pct)}</td>
